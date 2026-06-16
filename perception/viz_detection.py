@@ -20,6 +20,7 @@ sys.path.insert(0, ".")
 from common.config import (
     FAKE_CAMERA_PUB, DETECTION_TARGET_CLASS,
     DETECTION_CONF_THRESHOLD, DETECTION_MODEL, DEPTH_SCALE,
+    APRILTAG_FAMILY, APRILTAG_SIZE,
 )
 from common.types import MsgType
 from common.zmq_message import make_publisher, publish, ZmqMessage
@@ -27,6 +28,40 @@ from perception.camera import OrbbecCamera
 from perception.detection import (
     load_model, detect_target, mask_to_3d_points, remove_outliers, fit_aabb,
 )
+from perception.localization import (
+    load_detector, detect_tag_pose, invert_transform, transform_points,
+)
+
+
+
+def rotation_matrix_to_quaternion(R):
+    """Convert 3x3 rotation matrix to (w, x, y, z) quaternion for viser."""
+    trace = R[0, 0] + R[1, 1] + R[2, 2]
+    if trace > 0:
+        s = 0.5 / np.sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (R[2, 1] - R[1, 2]) * s
+        y = (R[0, 2] - R[2, 0]) * s
+        z = (R[1, 0] - R[0, 1]) * s
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2])
+        w = (R[2, 1] - R[1, 2]) / s
+        x = 0.25 * s
+        y = (R[0, 1] + R[1, 0]) / s
+        z = (R[0, 2] + R[2, 0]) / s
+    elif R[1, 1] > R[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2])
+        w = (R[0, 2] - R[2, 0]) / s
+        x = (R[0, 1] + R[1, 0]) / s
+        y = 0.25 * s
+        z = (R[1, 2] + R[2, 1]) / s
+    else:
+        s = 2.0 * np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1])
+        w = (R[1, 0] - R[0, 1]) / s
+        x = (R[0, 2] + R[2, 0]) / s
+        y = (R[1, 2] + R[2, 1]) / s
+        z = 0.25 * s
+    return (w, x, y, z)
 
 
 
@@ -82,6 +117,8 @@ def main():
     parser.add_argument("--stride", type=int, default=4, help="Point cloud downsample stride")
     parser.add_argument("--port", type=int, default=8080, help="Viser server port")
     parser.add_argument("--no-zmq", action="store_true", help="Disable ZMQ publishing")
+    parser.add_argument("--localize", action="store_true",
+                        help="Enable AprilTag-based frame transform (tag = world origin)")
     args = parser.parse_args()
 
     # Initialize
@@ -95,10 +132,18 @@ def main():
 
     pub = None if args.no_zmq else make_publisher(FAKE_CAMERA_PUB)
 
+    # AprilTag localization
+    tag_detector = None
+    if args.localize:
+        print(f"Loading AprilTag detector: {APRILTAG_FAMILY}, size={APRILTAG_SIZE}m")
+        tag_detector = load_detector(APRILTAG_FAMILY)
+
     # Start viser server
     server = viser.ViserServer(port=args.port)
     server.scene.add_frame("/camera", axes_length=0.1, axes_radius=0.003)
     server.scene.add_grid("/grid", width=2, height=2, cell_size=0.1)
+    if args.localize:
+        server.scene.add_frame("/tag_origin", axes_length=0.1, axes_radius=0.004)
 
     # GUI elements
     gui_fps = server.gui.add_number("FPS", initial_value=0, disabled=True)
@@ -143,6 +188,22 @@ def main():
             else:
                 detected = False
 
+            # Frame transform (localization)
+            gui_status_prefix = ""
+            T_tag_camera = None
+            if tag_detector is not None:
+                T_camera_tag = detect_tag_pose(tag_detector, rgb, K, tag_size=APRILTAG_SIZE)
+                if T_camera_tag is not None:
+                    T_tag_camera = invert_transform(T_camera_tag)
+                    points_full = transform_points(points_full, T_tag_camera)
+                    if detected:
+                        obj_points = transform_points(obj_points, T_tag_camera)
+                        center, bbox_min, bbox_max = fit_aabb(obj_points)
+                        size = bbox_max - bbox_min
+                    gui_status_prefix = "[TAG] "
+                else:
+                    gui_status_prefix = "[TAG LOST] "
+
             # Update viser scene
             server.scene.add_point_cloud(
                 "/scene/points",
@@ -150,6 +211,18 @@ def main():
                 colors=colors_full,
                 point_size=0.003,
             )
+
+            # Camera pose in tag frame
+            if T_tag_camera is not None:
+                cam_pos = T_tag_camera[:3, 3]
+                cam_quat = rotation_matrix_to_quaternion(T_tag_camera[:3, :3])
+                server.scene.add_frame(
+                    "/scene/camera_pose",
+                    position=tuple(cam_pos),
+                    wxyz=cam_quat,
+                    axes_length=0.05,
+                    axes_radius=0.002,
+                )
 
             if detected:
                 # Mask points in green
@@ -178,7 +251,7 @@ def main():
                 )
 
                 gui_status.value = (
-                    f"DETECTED conf={confidence:.2f} "
+                    f"{gui_status_prefix}DETECTED conf={confidence:.2f} "
                     f"center=({center[0]:.2f},{center[1]:.2f},{center[2]:.2f}) "
                     f"size=({size[0]:.2f},{size[1]:.2f},{size[2]:.2f})"
                 )
@@ -209,7 +282,7 @@ def main():
                     colors=(0, 0, 0),
                     line_width=1.0,
                 )
-                gui_status.value = "No detection"
+                gui_status.value = f"{gui_status_prefix}No detection"
 
                 if pub is not None:
                     payload = {
