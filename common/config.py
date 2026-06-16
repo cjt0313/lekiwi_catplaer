@@ -37,3 +37,7 @@ DETECTION_TARGET_CLASS = "cat"
 DETECTION_CONF_THRESHOLD = 0.25
 DETECTION_MODEL = "yolo11x-seg.pt"
 DEPTH_SCALE = 1000.0  # Orbbec depth in millimeters
+
+# AprilTag localization
+APRILTAG_FAMILY = "tagStandard41h12"
+APRILTAG_SIZE = 0.091  # 91mm tag
