@@ -1,20 +1,33 @@
 """Orbbec RGB-D camera wrapper using pyorbbecsdk."""
 
+import ctypes
+
 import numpy as np
 from pyorbbecsdk import (
-    Pipeline, Config, OBStreamType, OBFormat, OBAlignMode,
+    Pipeline, Config, OBSensorType, OBFormat, OBAlignMode,
 )
 
 
+def _extract_frame_data(raw_buffer, dtype=np.uint8):
+    """Extract frame data via ctypes __array_interface__ (pyorbbecsdk requirement)."""
+    array_interface = raw_buffer.__array_interface__
+    data_ptr, _ = array_interface["data"]
+    data_shape = array_interface["shape"]
+    dtype_map = {
+        np.uint8: (ctypes.c_uint8, 1),
+        np.uint16: (ctypes.c_uint16, 2),
+    }
+    c_type, bytes_per_element = dtype_map[dtype]
+    num_elements = data_shape[0] // bytes_per_element
+    ctypes_array = (c_type * num_elements).from_address(data_ptr)
+    return np.frombuffer(ctypes_array, dtype=dtype).copy()
+
+
 class OrbbecCamera:
-    def __init__(self, color_width=640, color_height=480, color_fps=30,
-                 depth_width=640, depth_height=480, depth_fps=30):
+    def __init__(self, color_width=640, color_height=480, color_fps=30):
         self._color_w = color_width
         self._color_h = color_height
         self._color_fps = color_fps
-        self._depth_w = depth_width
-        self._depth_h = depth_height
-        self._depth_fps = depth_fps
         self._pipeline = None
         self._intrinsics = None
 
@@ -23,32 +36,48 @@ class OrbbecCamera:
 
         config = Config()
 
-        color_profiles = self._pipeline.get_stream_profile_list(OBStreamType.COLOR_STREAM)
-        color_profile = color_profiles.get_video_stream_profile(
-            self._color_w, self._color_h, OBFormat.RGB, self._color_fps
-        )
+        # Find matching color profile
+        color_profiles = self._pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
+        color_profile = None
+        for i in range(len(color_profiles)):
+            p = color_profiles[i]
+            if (p.get_format() == OBFormat.RGB
+                    and p.get_width() == self._color_w
+                    and p.get_height() == self._color_h):
+                color_profile = p
+                break
+        if color_profile is None:
+            raise RuntimeError(
+                f"No RGB profile found for {self._color_w}x{self._color_h}")
+
+        # Get HW-aligned depth profile compatible with this color profile
+        hw_d2c_profiles = self._pipeline.get_d2c_depth_profile_list(
+            color_profile, OBAlignMode.HW_MODE)
+        if len(hw_d2c_profiles) == 0:
+            raise RuntimeError("No HW D2C depth profiles available")
+        depth_profile = hw_d2c_profiles[0]
+
         config.enable_stream(color_profile)
-
-        depth_profiles = self._pipeline.get_stream_profile_list(OBStreamType.DEPTH_STREAM)
-        depth_profile = depth_profiles.get_video_stream_profile(
-            self._depth_w, self._depth_h, OBFormat.Y16, self._depth_fps
-        )
         config.enable_stream(depth_profile)
-
         config.set_align_mode(OBAlignMode.HW_MODE)
 
         self._pipeline.start(config)
 
-        intrinsic = depth_profile.get_intrinsic()
+        # Warmup: discard initial frames while sensor stabilizes
+        for _ in range(10):
+            self._pipeline.wait_for_frames(1000)
+
+        # Use color intrinsics since HW alignment maps depth into color frame
+        intrinsic = color_profile.get_intrinsic()
         self._intrinsics = np.array([
             [intrinsic.fx, 0.0, intrinsic.cx],
             [0.0, intrinsic.fy, intrinsic.cy],
             [0.0, 0.0, 1.0],
         ], dtype=np.float64)
 
-        print(f"[OrbbecCamera] Started: color={self._color_w}x{self._color_h}@{self._color_fps}fps, "
-              f"depth={self._depth_w}x{self._depth_h}@{self._depth_fps}fps")
-        print(f"[OrbbecCamera] Intrinsics: fx={intrinsic.fx:.1f} fy={intrinsic.fy:.1f} "
+        print(f"[OrbbecCamera] Started: color={self._color_w}x{self._color_h}@{color_profile.get_fps()}fps, "
+              f"depth=HW-aligned to {self._color_w}x{self._color_h}")
+        print(f"[OrbbecCamera] Intrinsics (color): fx={intrinsic.fx:.1f} fy={intrinsic.fy:.1f} "
               f"cx={intrinsic.cx:.1f} cy={intrinsic.cy:.1f}")
 
     def grab(self, timeout_ms=1000):
@@ -62,13 +91,11 @@ class OrbbecCamera:
         if color_frame is None or depth_frame is None:
             return None, None
 
-        rgb = np.asarray(color_frame.get_data()).reshape(
-            (color_frame.get_height(), color_frame.get_width(), 3)
-        )
+        c_h, c_w = color_frame.get_height(), color_frame.get_width()
+        rgb = _extract_frame_data(color_frame.get_data(), np.uint8).reshape((c_h, c_w, 3))
 
-        depth = np.asarray(depth_frame.get_data()).reshape(
-            (depth_frame.get_height(), depth_frame.get_width())
-        ).astype(np.uint16)
+        d_h, d_w = depth_frame.get_height(), depth_frame.get_width()
+        depth = _extract_frame_data(depth_frame.get_data(), np.uint16).reshape((d_h, d_w))
 
         return rgb, depth
 
