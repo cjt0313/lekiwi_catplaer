@@ -45,7 +45,7 @@ Stateless functions (plus model loading):
 
 Pipeline: `detect_target` → `mask_to_3d_points` → `remove_outliers` → `fit_aabb`.
 
-YOLO model: `yolov8n-seg.pt` (pretrained COCO, includes "cat" class). Loaded once at startup. Inference with `retina_masks=True` for full-resolution masks.
+YOLO model: `yolo11x-seg.pt` (pretrained COCO, x-size for best accuracy; RTX 4060 has sufficient VRAM). Loaded once at startup. Inference with `retina_masks=True` for full-resolution masks.
 
 ### `nodes/real_camera_node.py`
 
@@ -98,7 +98,7 @@ In `common/config.py`:
 ```python
 DETECTION_TARGET_CLASS = "cat"
 DETECTION_CONF_THRESHOLD = 0.25
-DETECTION_MODEL = "yolov8n-seg.pt"
+DETECTION_MODEL = "yolo11x-seg.pt"  # x-size for accuracy; RTX 4060 handles it
 DEPTH_SCALE = 1000.0  # Orbbec publishes depth in millimeters
 ```
 
@@ -115,9 +115,18 @@ pyorbbecsdk>=1.0
 ## How to Run
 
 ```bash
-# Run detection node standalone (camera must be connected)
+# Step 1: Test camera capture (saves sample RGB + depth images)
 conda activate lekiwi
+python -m perception.test_camera
+
+# Step 2: Test YOLO detection on a cup (saves annotated image with mask overlay)
+python -m perception.test_detection --target cup
+
+# Step 3: Run full detection node (publishes on ZMQ)
 python -m nodes.real_camera_node
+```
+
+Each test script produces visual output (saved images with overlays) for verification.
 
 # Run the full demo with fake robot pose + real detection
 # (state_node won't advance past WAIT_FOR_ROBOT without robot_pose,
