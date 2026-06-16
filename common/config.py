@@ -31,3 +31,9 @@ RETRACT_POSE = [0.0, -0.2, 0.4, 0.0, 0.0, 0.0]
 
 # Visualization
 VIZ_HTTP_PORT = 8080
+
+# Detection parameters
+DETECTION_TARGET_CLASS = "cat"
+DETECTION_CONF_THRESHOLD = 0.25
+DETECTION_MODEL = "yolo11x-seg.pt"
+DEPTH_SCALE = 1000.0  # Orbbec depth in millimeters
