@@ -1,32 +1,28 @@
-"""AprilTag detection and pose estimation."""
+"""AprilTag detection and pose estimation using pupil-apriltags."""
 
 import cv2
 import numpy as np
-import apriltag
+from pupil_apriltags import Detector
 
 
 def load_detector(family="tagStandard41h12"):
-    return apriltag.Detector(family=family)
+    return Detector(families=family)
 
 
 def detect_tag_pose(detector, rgb, K, tag_size=0.091):
     """Detect AprilTag and return T_camera_tag (4x4) or None."""
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    detections = detector.detect(gray)
+    camera_params = [K[0, 0], K[1, 1], K[0, 2], K[1, 2]]
+    detections = detector.detect(gray, estimate_tag_pose=True,
+                                 camera_params=camera_params, tag_size=tag_size)
 
     if len(detections) == 0:
         return None
 
     detection = detections[0]
-    pose_res = detection.pose(
-        tagsize=tag_size,
-        fx=K[0, 0], fy=K[1, 1],
-        cx=K[0, 2], cy=K[1, 2],
-    )
-
     T_camera_tag = np.eye(4)
-    T_camera_tag[:3, :3] = pose_res.R
-    T_camera_tag[:3, 3] = pose_res.t.flatten()
+    T_camera_tag[:3, :3] = detection.pose_R
+    T_camera_tag[:3, 3] = detection.pose_t.flatten()
     return T_camera_tag
 
 
