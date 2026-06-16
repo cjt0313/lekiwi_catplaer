@@ -172,7 +172,7 @@ def main():
                 # Center marker
                 server.scene.add_frame(
                     "/scene/center",
-                    position=center.tolist(),
+                    position=tuple(center),
                     axes_length=0.03,
                     axes_radius=0.002,
                 )
