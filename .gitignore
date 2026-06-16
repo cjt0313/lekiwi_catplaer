@@ -217,3 +217,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 make_slides.py
+
+# Test visualization outputs
+test_output_*.png
+*.pt
