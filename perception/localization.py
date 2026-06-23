@@ -9,7 +9,7 @@ def load_detector(family="tagStandard41h12"):
     return Detector(families=family)
 
 
-def detect_tag_pose(detector, rgb, K, tag_size=0.091):
+def detect_tag_pose(detector, rgb, K, tag_size=0.023):
     """Detect AprilTag and return T_camera_tag (4x4) or None."""
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     camera_params = [K[0, 0], K[1, 1], K[0, 2], K[1, 2]]
