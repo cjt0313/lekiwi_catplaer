@@ -195,6 +195,9 @@ def main():
                 T_camera_tag = detect_tag_pose(tag_detector, rgb, K, tag_size=APRILTAG_SIZE)
                 if T_camera_tag is not None:
                     T_tag_camera = invert_transform(T_camera_tag)
+                    # AprilTag Z points out of tag face (toward camera); flip to Z-into-surface.
+                    T_flip = np.diag([1.0, -1.0, -1.0, 1.0])
+                    T_tag_camera = T_flip @ T_tag_camera
                     points_full = transform_points(points_full, T_tag_camera)
                     if detected:
                         obj_points = transform_points(obj_points, T_tag_camera)
