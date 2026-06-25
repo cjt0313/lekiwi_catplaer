@@ -123,6 +123,9 @@ _GRID_COLORMAP = np.array([
 _ROBOT_CENTER = GRID_SIZE // 2
 _YY, _XX = np.ogrid[:GRID_SIZE, :GRID_SIZE]
 _ROBOT_MASK = (_XX - _ROBOT_CENTER)**2 + (_YY - _ROBOT_CENTER)**2 <= ROBOT_RADIUS_CELLS**2
+_FREESPACE_RADIUS_CELLS = int(0.20 / GRID_RESOLUTION)
+_FREESPACE_MASK = (_XX - _ROBOT_CENTER)**2 + (_YY - _ROBOT_CENTER)**2 <= _FREESPACE_RADIUS_CELLS**2
+_CLOSE_KERNEL = np.ones((3, 3), dtype=np.uint8)
 
 _GRID_SCALE = 4
 
@@ -142,11 +145,17 @@ def generate_grid_map(points, center_xy=None):
         freespace = zs < BASE_HEIGHT_THRESHOLD
         occupied = ~freespace
 
-        # Mark occupied cells first
         np.maximum.at(grid, (cy[occupied], cx[occupied]), 2)
-        # Mark freespace only where not already occupied
         free_mask = grid[cy[freespace], cx[freespace]] == 0
         grid[cy[freespace][free_mask], cx[freespace][free_mask]] = 1
+
+    # Force 20cm radius around robot as freespace
+    grid[_FREESPACE_MASK & (grid == 0)] = 1
+
+    # Morphological close to fill small holes in freespace
+    free_binary = (grid == 1).astype(np.uint8)
+    closed = cv2.morphologyEx(free_binary, cv2.MORPH_CLOSE, _CLOSE_KERNEL)
+    grid[(closed == 1) & (grid == 0)] = 1
 
     grid[_ROBOT_MASK] = 3
 
