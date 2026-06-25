@@ -246,7 +246,7 @@ def astar_grid(grid, start_rc, goal_rc):
     return []
 
 
-def draw_path_on_grid(grid_img, path, scale=_GRID_SCALE, color=(255, 255, 0)):
+def draw_path_on_grid(grid_img, path, scale=_GRID_SCALE, color=(0, 0, 0)):
     """Draw path as yellow line on the upscaled grid image."""
     if len(path) < 2:
         return
