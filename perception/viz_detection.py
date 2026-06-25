@@ -150,8 +150,8 @@ def generate_grid_map(points, center_xy=None):
         free_mask = grid[cy[freespace], cx[freespace]] == 0
         grid[cy[freespace][free_mask], cx[freespace][free_mask]] = 1
 
-    # Force 20cm radius around robot as freespace
-    grid[_FREESPACE_MASK & (grid == 0)] = 1
+    # Force 20cm radius around robot as freespace (overrides occupied from robot body)
+    grid[_FREESPACE_MASK] = 1
 
     # Morphological close to fill small holes in freespace
     free_binary = (grid == 1).astype(np.uint8)

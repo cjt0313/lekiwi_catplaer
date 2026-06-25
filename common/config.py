@@ -56,4 +56,4 @@ GRID_PHYSICAL_SIZE = GRID_SIZE * GRID_RESOLUTION  # 2.5m
 GRID_ORIGIN_OFFSET = GRID_PHYSICAL_SIZE / 2  # 1.25m — grid center = robot base
 BASE_HEIGHT_THRESHOLD = 0.01  # points below this Z in base frame are floor
 ROBOT_RADIUS_CELLS = int(0.15 / GRID_RESOLUTION)  # ~6 cells
-TARGET_RADIUS_CELLS = int(0.05 / GRID_RESOLUTION)  # ~2 cells
+TARGET_RADIUS_CELLS = int(0.10 / GRID_RESOLUTION)  # ~4 cells
