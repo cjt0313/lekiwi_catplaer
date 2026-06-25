@@ -213,6 +213,10 @@ def main():
     gui_fps = server.gui.add_number("FPS", initial_value=0, disabled=True)
     gui_status = server.gui.add_text("Status", initial_value="Starting...", disabled=True)
     gui_target = server.gui.add_text("Target", initial_value=args.target, disabled=True)
+    gui_rgb = server.gui.add_image(
+        np.zeros((480, 640, 3), dtype=np.uint8),
+        label="Camera",
+    )
     gui_grid = server.gui.add_image(
         np.zeros((GRID_SIZE * _GRID_SCALE, GRID_SIZE * _GRID_SCALE, 3), dtype=np.uint8),
         label="Grid Map",
@@ -234,6 +238,8 @@ def main():
             rgb, depth = camera.grab()
             if rgb is None:
                 continue
+
+            gui_rgb.image = rgb
 
             # Detection
             result = detect_target(model, rgb, args.target, DETECTION_CONF_THRESHOLD)
