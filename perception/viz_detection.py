@@ -124,12 +124,7 @@ _ROBOT_CENTER = GRID_SIZE // 2
 _YY, _XX = np.ogrid[:GRID_SIZE, :GRID_SIZE]
 _ROBOT_MASK = (_XX - _ROBOT_CENTER)**2 + (_YY - _ROBOT_CENTER)**2 <= ROBOT_RADIUS_CELLS**2
 
-_GRID_X = np.linspace(-GRID_ORIGIN_OFFSET + GRID_RESOLUTION / 2,
-                       GRID_ORIGIN_OFFSET - GRID_RESOLUTION / 2, GRID_SIZE)
-_GRID_Y = np.linspace(-GRID_ORIGIN_OFFSET + GRID_RESOLUTION / 2,
-                       GRID_ORIGIN_OFFSET - GRID_RESOLUTION / 2, GRID_SIZE)
-_GXX, _GYY = np.meshgrid(_GRID_X, _GRID_Y)
-_GRID_POINTS = np.stack([_GXX.ravel(), _GYY.ravel(), np.zeros(GRID_SIZE * GRID_SIZE)], axis=1).astype(np.float32)
+_GRID_SCALE = 4
 
 
 def generate_grid_map(points, center_xy=None):
@@ -204,6 +199,10 @@ def main():
     gui_fps = server.gui.add_number("FPS", initial_value=0, disabled=True)
     gui_status = server.gui.add_text("Status", initial_value="Starting...", disabled=True)
     gui_target = server.gui.add_text("Target", initial_value=args.target, disabled=True)
+    gui_grid = server.gui.add_image(
+        np.zeros((GRID_SIZE * _GRID_SCALE, GRID_SIZE * _GRID_SCALE, 3), dtype=np.uint8),
+        label="Grid Map",
+    )
 
     print(f"\nVisualization running at http://localhost:{args.port}")
     print(f"Target: '{args.target}', update rate: {args.fps} Hz, stride: {args.stride}")
@@ -280,17 +279,13 @@ def main():
                     axes_radius=0.002,
                 )
 
-            # 2D Grid map
+            # 2D Grid map (rendered on GUI panel)
             if T_base_camera is not None:
                 target_xy = center[:2] if detected else None
                 grid = generate_grid_map(points_full, center_xy=target_xy)
-                grid_colors = _GRID_COLORMAP[grid].reshape(-1, 3)
-                server.scene.add_point_cloud(
-                    "/scene/grid_map",
-                    points=_GRID_POINTS,
-                    colors=grid_colors,
-                    point_size=GRID_RESOLUTION,
-                )
+                grid_img = _GRID_COLORMAP[grid]
+                grid_img = np.repeat(np.repeat(grid_img, _GRID_SCALE, axis=0), _GRID_SCALE, axis=1)
+                gui_grid.image = grid_img
 
             if detected:
                 # Mask points in green
