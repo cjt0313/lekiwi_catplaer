@@ -23,7 +23,7 @@ from common.config import (
     DETECTION_CONF_THRESHOLD, DETECTION_MODEL, DEPTH_SCALE,
     APRILTAG_FAMILY, APRILTAG_SIZE, T_BASE_TAG,
     GRID_SIZE, GRID_RESOLUTION, GRID_ORIGIN_OFFSET,
-    BASE_HEIGHT_THRESHOLD, ROBOT_RADIUS_CELLS, TARGET_RADIUS_CELLS,
+    BASE_HEIGHT_THRESHOLD, ROBOT_RADIUS_CELLS, TARGET_RADIUS_CELLS, TARGET_GRID_INFLATE,
 )
 from common.types import MsgType
 from common.zmq_message import make_publisher, publish, ZmqMessage
@@ -131,7 +131,7 @@ _CLOSE_KERNEL = np.ones((3, 3), dtype=np.uint8)
 _GRID_SCALE = 4
 
 
-def generate_grid_map(points, center_xy=None):
+def generate_grid_map(points, center_xy=None, target_radius_m=None):
     """Generate 2D occupancy grid from base-frame points.
     Returns 100x100 uint8: 0=unknown, 1=freespace, 2=occupied, 3=robot, 4=target.
     """
@@ -164,7 +164,11 @@ def generate_grid_map(points, center_xy=None):
         tx = int((center_xy[0] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION)
         ty = int((center_xy[1] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION)
         if 0 <= tx < GRID_SIZE and 0 <= ty < GRID_SIZE:
-            target_mask = (_XX - tx)**2 + (_YY - ty)**2 <= TARGET_RADIUS_CELLS**2
+            if target_radius_m is not None:
+                r_cells = int(target_radius_m * TARGET_GRID_INFLATE / GRID_RESOLUTION)
+            else:
+                r_cells = TARGET_RADIUS_CELLS
+            target_mask = (_XX - tx)**2 + (_YY - ty)**2 <= r_cells**2
             grid[target_mask] = 4
 
     return grid
@@ -292,7 +296,8 @@ def main():
             # 2D Grid map (rendered on GUI panel)
             if T_base_camera is not None:
                 target_xy = center[:2] if detected else None
-                grid = generate_grid_map(points_full, center_xy=target_xy)
+                target_r = max(size[0], size[1]) / 2 if detected else None
+                grid = generate_grid_map(points_full, center_xy=target_xy, target_radius_m=target_r)
                 grid_img = _GRID_COLORMAP[grid]
                 grid_img = np.repeat(np.repeat(grid_img, _GRID_SCALE, axis=0), _GRID_SCALE, axis=1)
                 gui_grid.image = grid_img
