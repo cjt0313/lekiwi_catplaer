@@ -23,7 +23,8 @@ from common.config import (
     DETECTION_CONF_THRESHOLD, DETECTION_MODEL, DEPTH_SCALE,
     APRILTAG_FAMILY, APRILTAG_SIZE, T_BASE_TAG,
     GRID_SIZE, GRID_RESOLUTION, GRID_ORIGIN_OFFSET,
-    BASE_HEIGHT_THRESHOLD, ROBOT_RADIUS_CELLS, TARGET_RADIUS_CELLS, TARGET_GRID_INFLATE,
+    BASE_HEIGHT_THRESHOLD, ROBOT_RADIUS_CELLS, TARGET_RADIUS_CELLS,
+    TARGET_GRID_INFLATE, ROBOT_COLLISION_RADIUS,
 )
 from common.types import MsgType
 from common.zmq_message import make_publisher, publish, ZmqMessage
@@ -174,6 +175,99 @@ def generate_grid_map(points, center_xy=None, target_radius_m=None):
     return grid
 
 
+_INFLATE_CELLS = int(ROBOT_COLLISION_RADIUS / GRID_RESOLUTION)
+_INFLATE_KERNEL = cv2.getStructuringElement(
+    cv2.MORPH_ELLIPSE, (2 * _INFLATE_CELLS + 1, 2 * _INFLATE_CELLS + 1)
+)
+
+
+def inflate_obstacles(grid):
+    """Inflate occupied cells by robot collision radius. Returns binary obstacle map."""
+    obstacle = ((grid == 2) | (grid == 0)).astype(np.uint8)
+    return cv2.dilate(obstacle, _INFLATE_KERNEL)
+
+
+def astar_grid(grid, start_rc, goal_rc):
+    """A* on 100x100 grid. Returns path as list of (row, col) or empty list."""
+    import heapq
+
+    inflated = inflate_obstacles(grid)
+    sr, sc = start_rc
+    gr, gc = goal_rc
+
+    if not (0 <= gr < GRID_SIZE and 0 <= gc < GRID_SIZE):
+        return []
+    if inflated[gr, gc] == 1:
+        return []
+
+    def h(r, c):
+        return ((r - gr)**2 + (c - gc)**2) ** 0.5
+
+    open_set = [(h(sr, sc), 0.0, sr, sc)]
+    came_from = {}
+    g_score = {(sr, sc): 0.0}
+    closed = set()
+
+    neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1),
+                 (-1, -1), (-1, 1), (1, -1), (1, 1)]
+
+    while open_set:
+        _, cost, r, c = heapq.heappop(open_set)
+        if (r, c) in closed:
+            continue
+        closed.add((r, c))
+
+        if r == gr and c == gc:
+            path = []
+            cur = (gr, gc)
+            while cur in came_from:
+                path.append(cur)
+                cur = came_from[cur]
+            path.append((sr, sc))
+            path.reverse()
+            return path
+
+        for dr, dc in neighbors:
+            nr, nc = r + dr, c + dc
+            if not (0 <= nr < GRID_SIZE and 0 <= nc < GRID_SIZE):
+                continue
+            if inflated[nr, nc] == 1:
+                continue
+            if (nr, nc) in closed:
+                continue
+
+            move_cost = 1.414 if (dr != 0 and dc != 0) else 1.0
+            new_g = g_score[(r, c)] + move_cost
+            if new_g < g_score.get((nr, nc), float("inf")):
+                g_score[(nr, nc)] = new_g
+                heapq.heappush(open_set, (new_g + h(nr, nc), new_g, nr, nc))
+                came_from[(nr, nc)] = (r, c)
+
+    return []
+
+
+def draw_path_on_grid(grid_img, path, scale=_GRID_SCALE, color=(255, 255, 0)):
+    """Draw path as yellow line on the upscaled grid image."""
+    if len(path) < 2:
+        return
+    for i in range(len(path) - 1):
+        r0, c0 = path[i]
+        r1, c1 = path[i + 1]
+        pt0 = (c0 * scale + scale // 2, r0 * scale + scale // 2)
+        pt1 = (c1 * scale + scale // 2, r1 * scale + scale // 2)
+        cv2.line(grid_img, pt0, pt1, color, 2)
+
+
+def path_to_world(path):
+    """Convert grid path [(row, col), ...] to base-frame [(x, y), ...]."""
+    world_path = []
+    for r, c in path:
+        x = c * GRID_RESOLUTION - GRID_ORIGIN_OFFSET
+        y = r * GRID_RESOLUTION - GRID_ORIGIN_OFFSET
+        world_path.append((x, y))
+    return world_path
+
+
 def main():
     parser = argparse.ArgumentParser(description="Real-time 3D detection visualizer")
     parser.add_argument("--target", default=DETECTION_TARGET_CLASS)
@@ -306,6 +400,18 @@ def main():
                 grid = generate_grid_map(points_full, center_xy=target_xy, target_radius_m=target_r)
                 grid_img = _GRID_COLORMAP[grid]
                 grid_img = np.repeat(np.repeat(grid_img, _GRID_SCALE, axis=0), _GRID_SCALE, axis=1)
+
+                # A* path planning from robot to target
+                if detected:
+                    start_rc = (_ROBOT_CENTER, _ROBOT_CENTER)
+                    goal_rc = (
+                        int((target_xy[1] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION),
+                        int((target_xy[0] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION),
+                    )
+                    path = astar_grid(grid, start_rc, goal_rc)
+                    if path:
+                        draw_path_on_grid(grid_img, path)
+
                 gui_grid.image = grid_img
 
             if detected:
