@@ -20,7 +20,9 @@ sys.path.insert(0, ".")
 from common.config import (
     FAKE_CAMERA_PUB, DETECTION_TARGET_CLASS,
     DETECTION_CONF_THRESHOLD, DETECTION_MODEL, DEPTH_SCALE,
-    APRILTAG_FAMILY, APRILTAG_SIZE,
+    APRILTAG_FAMILY, APRILTAG_SIZE, T_BASE_TAG,
+    GRID_SIZE, GRID_RESOLUTION, GRID_ORIGIN_OFFSET,
+    BASE_HEIGHT_THRESHOLD, ROBOT_RADIUS_CELLS, TARGET_RADIUS_CELLS,
 )
 from common.types import MsgType
 from common.zmq_message import make_publisher, publish, ZmqMessage
@@ -110,6 +112,59 @@ def bbox_wireframe(bbox_min, bbox_max):
     return np.array([[corners[a], corners[b]] for a, b in edges])  # (12, 2, 3)
 
 
+_GRID_COLORMAP = np.array([
+    [128, 128, 128],  # 0: unknown — gray
+    [255, 255, 255],  # 1: freespace — white
+    [180, 0, 0],      # 2: occupied — dark red
+    [0, 100, 255],    # 3: robot — blue
+    [0, 255, 100],    # 4: target — green
+], dtype=np.uint8)
+
+_ROBOT_CENTER = GRID_SIZE // 2
+_YY, _XX = np.ogrid[:GRID_SIZE, :GRID_SIZE]
+_ROBOT_MASK = (_XX - _ROBOT_CENTER)**2 + (_YY - _ROBOT_CENTER)**2 <= ROBOT_RADIUS_CELLS**2
+
+_GRID_X = np.linspace(-GRID_ORIGIN_OFFSET + GRID_RESOLUTION / 2,
+                       GRID_ORIGIN_OFFSET - GRID_RESOLUTION / 2, GRID_SIZE)
+_GRID_Y = np.linspace(-GRID_ORIGIN_OFFSET + GRID_RESOLUTION / 2,
+                       GRID_ORIGIN_OFFSET - GRID_RESOLUTION / 2, GRID_SIZE)
+_GXX, _GYY = np.meshgrid(_GRID_X, _GRID_Y)
+_GRID_POINTS = np.stack([_GXX.ravel(), _GYY.ravel(), np.zeros(GRID_SIZE * GRID_SIZE)], axis=1).astype(np.float32)
+
+
+def generate_grid_map(points, center_xy=None):
+    """Generate 2D occupancy grid from base-frame points.
+    Returns 100x100 uint8: 0=unknown, 1=freespace, 2=occupied, 3=robot, 4=target.
+    """
+    grid = np.zeros((GRID_SIZE, GRID_SIZE), dtype=np.uint8)
+
+    if len(points) > 0:
+        cx = ((points[:, 0] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION).astype(int)
+        cy = ((points[:, 1] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION).astype(int)
+        valid = (cx >= 0) & (cx < GRID_SIZE) & (cy >= 0) & (cy < GRID_SIZE)
+        cx, cy, zs = cx[valid], cy[valid], points[valid, 2]
+
+        freespace = zs < BASE_HEIGHT_THRESHOLD
+        occupied = ~freespace
+
+        # Mark occupied cells first
+        np.maximum.at(grid, (cy[occupied], cx[occupied]), 2)
+        # Mark freespace only where not already occupied
+        free_mask = grid[cy[freespace], cx[freespace]] == 0
+        grid[cy[freespace][free_mask], cx[freespace][free_mask]] = 1
+
+    grid[_ROBOT_MASK] = 3
+
+    if center_xy is not None:
+        tx = int((center_xy[0] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION)
+        ty = int((center_xy[1] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION)
+        if 0 <= tx < GRID_SIZE and 0 <= ty < GRID_SIZE:
+            target_mask = (_XX - tx)**2 + (_YY - ty)**2 <= TARGET_RADIUS_CELLS**2
+            grid[target_mask] = 4
+
+    return grid
+
+
 def main():
     parser = argparse.ArgumentParser(description="Real-time 3D detection visualizer")
     parser.add_argument("--target", default=DETECTION_TARGET_CLASS)
@@ -188,22 +243,20 @@ def main():
             else:
                 detected = False
 
-            # Frame transform (localization)
+            # Frame transform (localization → base frame)
             gui_status_prefix = ""
-            T_tag_camera = None
-            if tag_detector is not None:
+            T_base_camera = None
+            if tag_detector is not None and T_BASE_TAG is not None:
                 T_camera_tag = detect_tag_pose(tag_detector, rgb, K, tag_size=APRILTAG_SIZE)
                 if T_camera_tag is not None:
                     T_tag_camera = invert_transform(T_camera_tag)
-                    # AprilTag Z points out of tag face (toward camera); flip to Z-into-surface.
-                    T_flip = np.diag([1.0, -1.0, -1.0, 1.0])
-                    T_tag_camera = T_flip @ T_tag_camera
-                    points_full = transform_points(points_full, T_tag_camera)
+                    T_base_camera = T_BASE_TAG @ T_tag_camera
+                    points_full = transform_points(points_full, T_base_camera)
                     if detected:
-                        obj_points = transform_points(obj_points, T_tag_camera)
+                        obj_points = transform_points(obj_points, T_base_camera)
                         center, bbox_min, bbox_max = fit_aabb(obj_points)
                         size = bbox_max - bbox_min
-                    gui_status_prefix = "[TAG] "
+                    gui_status_prefix = "[BASE] "
                 else:
                     gui_status_prefix = "[TAG LOST] "
 
@@ -215,16 +268,28 @@ def main():
                 point_size=0.003,
             )
 
-            # Camera pose in tag frame
-            if T_tag_camera is not None:
-                cam_pos = T_tag_camera[:3, 3]
-                cam_quat = rotation_matrix_to_quaternion(T_tag_camera[:3, :3])
+            # Camera pose in base frame
+            if T_base_camera is not None:
+                cam_pos = T_base_camera[:3, 3]
+                cam_quat = rotation_matrix_to_quaternion(T_base_camera[:3, :3])
                 server.scene.add_frame(
                     "/scene/camera_pose",
                     position=tuple(cam_pos),
                     wxyz=cam_quat,
                     axes_length=0.05,
                     axes_radius=0.002,
+                )
+
+            # 2D Grid map
+            if T_base_camera is not None:
+                target_xy = center[:2] if detected else None
+                grid = generate_grid_map(points_full, center_xy=target_xy)
+                grid_colors = _GRID_COLORMAP[grid].reshape(-1, 3)
+                server.scene.add_point_cloud(
+                    "/scene/grid_map",
+                    points=_GRID_POINTS,
+                    colors=grid_colors,
+                    point_size=GRID_RESOLUTION,
                 )
 
             if detected:
