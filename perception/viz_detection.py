@@ -367,6 +367,17 @@ def main():
         msg = json.dumps({"enabled": robot_enabled}).encode("utf-8")
         control_pub.send_multipart([CONTROL_SIGNAL_TOPIC.encode("utf-8"), msg])
 
+    gui_estop_btn = server.gui.add_button("E-STOP", color="red")
+
+    @gui_estop_btn.on_click
+    def _estop(event):
+        nonlocal robot_enabled
+        robot_enabled = False
+        gui_robot_btn.name = "Robot: OFF"
+        gui_robot_btn.color = "red"
+        msg = json.dumps({"enabled": False, "estop": True}).encode("utf-8")
+        control_pub.send_multipart([CONTROL_SIGNAL_TOPIC.encode("utf-8"), msg])
+
     gui_rgb = server.gui.add_image(
         np.zeros((480, 640, 3), dtype=np.uint8),
         label="Camera",

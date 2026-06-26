@@ -142,6 +142,11 @@ class RobotBridge:
             parts = self.control_socket.recv_multipart()
             if len(parts) == 2:
                 msg = json.loads(parts[1].decode("utf-8"))
+                if msg.get("estop"):
+                    print("\n[E-STOP] Triggered from GUI!")
+                    self.enabled = False
+                    self._send_stop()
+                    continue
                 new_state = msg.get("enabled", self.enabled)
                 if new_state != self.enabled:
                     self.enabled = new_state
