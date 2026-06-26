@@ -420,13 +420,13 @@ def main():
                 grid_img = np.repeat(np.repeat(grid_img, _GRID_SCALE, axis=0), _GRID_SCALE, axis=1)
 
                 # A* path planning: maintain standoff distance from target
+                world_path = None
                 if detected:
                     start_rc = (_ROBOT_CENTER, _ROBOT_CENTER)
                     robot_xy = np.array([0.0, 0.0])
                     dir_to_robot = robot_xy - target_xy
                     dist = np.linalg.norm(dir_to_robot)
-                    if dist < args.distance and dist > 0.01:
-                        # Too close — plan path to move away to desired distance
+                    if abs(dist - args.distance) > 0.05 and dist > 0.01:
                         standoff_xy = target_xy + dir_to_robot / dist * args.distance
                         goal_rc = (
                             int((standoff_xy[1] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION),
@@ -435,16 +435,7 @@ def main():
                         path = astar_grid(grid, start_rc, goal_rc)
                         if path:
                             draw_path_on_grid(grid_img, path)
-                    elif dist > args.distance:
-                        # Too far — plan path to approach to desired distance
-                        standoff_xy = target_xy + dir_to_robot / dist * args.distance
-                        goal_rc = (
-                            int((standoff_xy[1] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION),
-                            int((standoff_xy[0] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION),
-                        )
-                        path = astar_grid(grid, start_rc, goal_rc)
-                        if path:
-                            draw_path_on_grid(grid_img, path)
+                            world_path = path_to_world(path)
 
                 gui_grid.image = grid_img
 
@@ -488,6 +479,7 @@ def main():
                         "bbox_max": bbox_max.tolist(),
                         "confidence": confidence,
                         "visible": True,
+                        "path": world_path,
                     }
                     msg = ZmqMessage.create(MsgType.CAT_BBOX_3D, payload,
                                             "viz_detection", seq=seq, frame_id="camera")
