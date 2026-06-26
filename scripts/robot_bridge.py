@@ -186,9 +186,8 @@ class RobotBridge:
             self.base_vx = 0.0
             self.base_vy = 0.0
 
-        # Angular: face the direction of travel
-        angle_to_target = math.atan2(wy, wx)
-        self.base_wz = np.clip(KP_ANGULAR * angle_to_target, -MAX_ANGULAR_SPEED, MAX_ANGULAR_SPEED)
+        # Angular: disabled (robot doesn't rotate)
+        self.base_wz = 0.0
 
     def _read_control_signal(self):
         """Check for enable/disable from viz button (non-blocking)."""
