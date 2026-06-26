@@ -27,6 +27,7 @@ import sys
 import time
 
 import zmq
+import numpy as np
 
 # Robot connection
 REMOTE_IP = "192.168.100.1"
@@ -34,13 +35,20 @@ PORT_CMD = 5555
 PORT_OBS = 5556
 FPS = 30
 
-# Internal pipeline subscription
-CONTROLLER_PUB = "tcp://127.0.0.1:5565"
-ROBOT_COMMAND_TOPIC = "robot_command"
+# Path subscription (from viz_detection)
+PERCEPTION_PUB = "tcp://127.0.0.1:5560"
+PATH_TOPIC = "cat_bbox_3d"
 
 # Control signal (from viz button)
 CONTROL_SIGNAL_PUB = "tcp://127.0.0.1:5570"
 CONTROL_SIGNAL_TOPIC = "bridge_control"
+
+# Path following controller gains
+KP_LINEAR = 0.5      # proportional gain for linear velocity
+KP_ANGULAR = 1.0     # proportional gain for angular velocity
+MAX_LINEAR_SPEED = 0.15   # m/s
+MAX_ANGULAR_SPEED = 0.5   # rad/s
+WAYPOINT_THRESHOLD = 0.08 # meters - switch to next waypoint when this close
 
 # Arm joint names (LeKiwi protocol)
 ARM_JOINTS = [
@@ -73,6 +81,10 @@ class RobotBridge:
         self.base_vy = 0.0
         self.base_wz = 0.0
 
+        # Path following state
+        self.path = []         # list of (x, y) waypoints in robot base frame
+        self.waypoint_idx = 0  # current target waypoint
+
         # ZMQ setup
         self.ctx = zmq.Context()
 
@@ -86,12 +98,12 @@ class RobotBridge:
         self.obs_socket.connect(f"tcp://{REMOTE_IP}:{PORT_OBS}")
         self.obs_socket.setsockopt(zmq.CONFLATE, 1)
 
-        # SUB to internal pipeline (only if base is enabled)
-        self.pipeline_socket = None
+        # SUB to perception path (from viz_detection)
+        self.path_socket = None
         if self.base_enabled:
-            self.pipeline_socket = self.ctx.socket(zmq.SUB)
-            self.pipeline_socket.connect(CONTROLLER_PUB)
-            self.pipeline_socket.setsockopt_string(zmq.SUBSCRIBE, ROBOT_COMMAND_TOPIC)
+            self.path_socket = self.ctx.socket(zmq.SUB)
+            self.path_socket.connect(PERCEPTION_PUB)
+            self.path_socket.setsockopt_string(zmq.SUBSCRIBE, PATH_TOPIC)
 
         # SUB to control signal from viz
         self.control_socket = self.ctx.socket(zmq.SUB)
@@ -119,22 +131,64 @@ class RobotBridge:
         except Exception:
             pass
 
-    def _read_pipeline(self):
-        """Read latest ROBOT_COMMAND from internal pipeline (non-blocking)."""
-        if not self.pipeline_socket:
+    def _read_path(self):
+        """Read latest path from viz_detection (non-blocking). Updates self.path."""
+        if not self.path_socket:
             return
-        while True:
-            if self.pipeline_socket.poll(0):
-                parts = self.pipeline_socket.recv_multipart()
-                if len(parts) == 2:
-                    data = json.loads(parts[1].decode("utf-8"))
-                    payload = data.get("payload", {})
-                    base_cmd = payload.get("base_cmd", {})
-                    self.base_vx = base_cmd.get("vx", 0.0)
-                    self.base_vy = base_cmd.get("vy", 0.0)
-                    self.base_wz = base_cmd.get("wz", 0.0)
-            else:
-                break
+        while self.path_socket.poll(0):
+            parts = self.path_socket.recv_multipart()
+            if len(parts) == 2:
+                data = json.loads(parts[1].decode("utf-8"))
+                payload = data.get("payload", {})
+                new_path = payload.get("path")
+                if new_path and len(new_path) > 1:
+                    self.path = new_path
+                    self.waypoint_idx = 1  # skip first point (robot position)
+                elif not payload.get("visible", False):
+                    self.path = []
+                    self.waypoint_idx = 0
+
+    def _follow_path(self):
+        """Proportional controller: compute velocity toward next waypoint.
+
+        The path is in robot base frame (robot is at origin, facing +X).
+        Each waypoint is (x, y) in meters from robot's current position.
+        """
+        if not self.path or self.waypoint_idx >= len(self.path):
+            self.base_vx = 0.0
+            self.base_vy = 0.0
+            self.base_wz = 0.0
+            return
+
+        # Target waypoint (in base frame, robot at origin)
+        wx, wy = self.path[self.waypoint_idx]
+
+        # Distance to waypoint
+        dist = math.sqrt(wx * wx + wy * wy)
+
+        # If close enough, advance to next waypoint
+        if dist < WAYPOINT_THRESHOLD:
+            self.waypoint_idx += 1
+            if self.waypoint_idx >= len(self.path):
+                self.base_vx = 0.0
+                self.base_vy = 0.0
+                self.base_wz = 0.0
+                return
+            wx, wy = self.path[self.waypoint_idx]
+            dist = math.sqrt(wx * wx + wy * wy)
+
+        # Proportional control: drive toward waypoint
+        # vx = forward (toward waypoint X), vy = strafe (toward waypoint Y)
+        if dist > 0.01:
+            self.base_vx = np.clip(KP_LINEAR * wx, -MAX_LINEAR_SPEED, MAX_LINEAR_SPEED)
+            self.base_vy = np.clip(KP_LINEAR * wy, -MAX_LINEAR_SPEED, MAX_LINEAR_SPEED)
+        else:
+            self.base_vx = 0.0
+            self.base_vy = 0.0
+
+        # Angular: face the direction of travel
+        angle_to_target = math.atan2(wy, wx)
+        self.base_wz = np.clip(KP_ANGULAR * angle_to_target, -MAX_ANGULAR_SPEED, MAX_ANGULAR_SPEED)
 
     def _read_control_signal(self):
         """Check for enable/disable from viz button (non-blocking)."""
@@ -230,9 +284,10 @@ class RobotBridge:
                 sys.stdout.flush()
                 continue
 
-            # Read pipeline commands
+            # Read path and compute velocity
             if self.base_enabled:
-                self._read_pipeline()
+                self._read_path()
+                self._follow_path()
 
             # Compute arm flirting
             if self.arm_enabled:
@@ -256,7 +311,8 @@ class RobotBridge:
             # Status line
             flirt_str = f"j4={self.arm_positions[FLIRT_JOINT_INDEX]:+6.1f}°" if self.arm_enabled else "arm:off"
             base_str = f"vx={self.base_vx:+.3f} vy={self.base_vy:+.3f} wz={theta_deg_s:+.1f}°/s"
-            sys.stdout.write(f"\r[BRIDGE] {flirt_str} | {base_str}   ")
+            wp_str = f"wp={self.waypoint_idx}/{len(self.path)}" if self.path else "no path"
+            sys.stdout.write(f"\r[BRIDGE] {flirt_str} | {base_str} | {wp_str}   ")
             sys.stdout.flush()
 
             # Maintain FPS
@@ -271,8 +327,8 @@ class RobotBridge:
         self.obs_socket.close()
         self.cmd_socket.close()
         self.control_socket.close()
-        if self.pipeline_socket:
-            self.pipeline_socket.close()
+        if self.path_socket:
+            self.path_socket.close()
         self.ctx.term()
 
 
