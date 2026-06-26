@@ -67,7 +67,7 @@ class RobotBridge:
         self.arm_enabled = arm_enabled
         self.base_enabled = base_enabled
         self.running = True
-        self.enabled = True  # controlled by viz button
+        self.enabled = False  # starts disabled, enable via viz button
         self.arm_positions = list(HOME_POSE_DEG)
         self.base_vx = 0.0
         self.base_vy = 0.0
