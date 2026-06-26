@@ -24,7 +24,7 @@ from common.config import (
     APRILTAG_FAMILY, APRILTAG_SIZE, T_BASE_TAG,
     GRID_SIZE, GRID_RESOLUTION, GRID_ORIGIN_OFFSET,
     BASE_HEIGHT_THRESHOLD, ROBOT_RADIUS_CELLS, TARGET_RADIUS_CELLS,
-    TARGET_GRID_INFLATE, ROBOT_COLLISION_RADIUS,
+    TARGET_GRID_INFLATE, ROBOT_COLLISION_RADIUS, DESIRED_CAT_DISTANCE,
 )
 from common.types import MsgType
 from common.zmq_message import make_publisher, publish, ZmqMessage
@@ -417,25 +417,22 @@ def main():
                 grid_img = _GRID_COLORMAP[grid]
                 grid_img = np.repeat(np.repeat(grid_img, _GRID_SCALE, axis=0), _GRID_SCALE, axis=1)
 
-                # A* path planning from robot to target
+                # A* path planning from robot to standoff point near target
                 if detected:
                     start_rc = (_ROBOT_CENTER, _ROBOT_CENTER)
-                    goal_rc = (
-                        int((target_xy[1] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION),
-                        int((target_xy[0] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION),
-                    )
-                    path = astar_grid(grid, start_rc, goal_rc)
-                    if path:
-                        draw_path_on_grid(grid_img, path)
-                    else:
-                        inflated = inflate_obstacles(grid)
-                        print(f"[A*] NO PATH. start={start_rc} goal={goal_rc}")
-                        print(f"[A*] grid[start]={grid[start_rc]} grid[goal]={grid[goal_rc[0], goal_rc[1]] if 0<=goal_rc[0]<GRID_SIZE and 0<=goal_rc[1]<GRID_SIZE else 'OOB'}")
-                        print(f"[A*] inflated[start]={inflated[start_rc]} inflated[goal]={inflated[goal_rc[0], goal_rc[1]] if 0<=goal_rc[0]<GRID_SIZE and 0<=goal_rc[1]<GRID_SIZE else 'OOB'}")
-                        print(f"[A*] grid unique values: {np.unique(grid, return_counts=True)}")
-                        np.save("debug_grid.npy", grid)
-                        np.save("debug_inflated.npy", inflated)
-                        cv2.imwrite("debug_grid_img.png", grid_img[:, :, ::-1])
+                    # Compute standoff goal: DESIRED_CAT_DISTANCE from target, toward robot
+                    robot_xy = np.array([0.0, 0.0])
+                    dir_to_robot = robot_xy - target_xy
+                    dist = np.linalg.norm(dir_to_robot)
+                    if dist > DESIRED_CAT_DISTANCE:
+                        standoff_xy = target_xy + dir_to_robot / dist * DESIRED_CAT_DISTANCE
+                        goal_rc = (
+                            int((standoff_xy[1] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION),
+                            int((standoff_xy[0] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION),
+                        )
+                        path = astar_grid(grid, start_rc, goal_rc)
+                        if path:
+                            draw_path_on_grid(grid_img, path)
 
                 gui_grid.image = grid_img
 
