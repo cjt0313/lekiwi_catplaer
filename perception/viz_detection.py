@@ -183,7 +183,7 @@ _INFLATE_KERNEL = cv2.getStructuringElement(
 
 def inflate_obstacles(grid):
     """Inflate occupied cells by robot collision radius. Returns binary obstacle map."""
-    obstacle = ((grid == 2) | (grid == 0)).astype(np.uint8)
+    obstacle = (grid == 2).astype(np.uint8)
     return cv2.dilate(obstacle, _INFLATE_KERNEL)
 
 
