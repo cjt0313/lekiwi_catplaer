@@ -48,17 +48,14 @@ ARM_JOINTS = [
     "arm_gripper.pos",
 ]
 
+# Home pose (degrees) - recorded from physical robot
+HOME_POSE_DEG = [-0.1, -102.5, 96.8, -75.8, -0.5, 3.3]
+
 # Arm flirting config (joint 4 = wrist_flex, index 3)
 FLIRT_JOINT_INDEX = 3
-FLIRT_CENTER_DEG = 0.0
+FLIRT_CENTER_DEG = HOME_POSE_DEG[3]  # oscillate around home position
 FLIRT_AMPLITUDE_DEG = 15.0
 FLIRT_FREQUENCY_HZ = 1.0
-
-# Home pose (degrees) - arm resting position
-HOME_POSE_DEG = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-
-# Play pose (degrees) - arm extended for wand presentation
-PLAY_POSE_DEG = [0.0, -30.0, 45.0, 0.0, 0.0, 50.0]
 
 
 class RobotBridge:
@@ -66,7 +63,7 @@ class RobotBridge:
         self.arm_enabled = arm_enabled
         self.base_enabled = base_enabled
         self.running = True
-        self.arm_positions = list(PLAY_POSE_DEG) if arm_enabled else list(HOME_POSE_DEG)
+        self.arm_positions = list(HOME_POSE_DEG)
         self.base_vx = 0.0
         self.base_vy = 0.0
         self.base_wz = 0.0
@@ -162,7 +159,23 @@ class RobotBridge:
         for i, joint in enumerate(ARM_JOINTS):
             self.arm_positions[i] = obs.get(joint, self.arm_positions[i])
         print(f"Connected! Arm positions: {[f'{p:.1f}' for p in self.arm_positions]}")
+        self._go_home()
         return True
+
+    def _go_home(self):
+        """Move arm to home position over ~1 second."""
+        print("Moving arm to home position...")
+        steps = FPS  # 30 steps = 1 second
+        start_positions = list(self.arm_positions)
+        for step in range(steps):
+            t = (step + 1) / steps
+            for i in range(6):
+                self.arm_positions[i] = start_positions[i] + t * (HOME_POSE_DEG[i] - start_positions[i])
+            action = {ARM_JOINTS[i]: self.arm_positions[i] for i in range(6)}
+            action.update({"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0})
+            self.cmd_socket.send_string(json.dumps(action))
+            time.sleep(1.0 / FPS)
+        print("Arm at home.")
 
     def run(self):
         """Main control loop at 30 Hz."""
