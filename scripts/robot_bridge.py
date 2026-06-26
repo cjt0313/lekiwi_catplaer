@@ -1,0 +1,277 @@
+#!/usr/bin/env python
+"""
+Bridge between the cat-player pipeline and the real LeKiwi robot.
+
+Subscribes to internal ROBOT_COMMAND messages (ZMQ SUB) and forwards
+translated commands to the real robot (ZMQ PUSH on 192.168.100.1:5555).
+
+Modes:
+    --arm-only   Only send arm flirting motion (base stays still)
+    --base-only  Only forward base velocity commands (arm at home)
+    (default)    Both arm flirting + base path following
+
+Usage:
+    # Start robot host first (on robot or via SSH):
+    #   python -m lerobot.robots.lekiwi.lekiwi_host --robot.id=my_lekiwi --robot.cameras='{}' --host.connection_time_s=600
+
+    python scripts/robot_bridge.py --arm-only    # Test arm flirting
+    python scripts/robot_bridge.py --base-only   # Test path following
+    python scripts/robot_bridge.py               # Full mode
+"""
+
+import argparse
+import json
+import math
+import signal
+import sys
+import time
+
+import zmq
+
+# Robot connection
+REMOTE_IP = "192.168.100.1"
+PORT_CMD = 5555
+PORT_OBS = 5556
+FPS = 30
+
+# Internal pipeline subscription
+CONTROLLER_PUB = "tcp://127.0.0.1:5565"
+ROBOT_COMMAND_TOPIC = "robot_command"
+
+# Arm joint names (LeKiwi protocol)
+ARM_JOINTS = [
+    "arm_shoulder_pan.pos",
+    "arm_shoulder_lift.pos",
+    "arm_elbow_flex.pos",
+    "arm_wrist_flex.pos",
+    "arm_wrist_roll.pos",
+    "arm_gripper.pos",
+]
+
+# Arm flirting config (joint 4 = wrist_flex, index 3)
+FLIRT_JOINT_INDEX = 3
+FLIRT_CENTER_DEG = 0.0
+FLIRT_AMPLITUDE_DEG = 15.0
+FLIRT_FREQUENCY_HZ = 1.0
+
+# Home pose (degrees) - arm resting position
+HOME_POSE_DEG = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# Play pose (degrees) - arm extended for wand presentation
+PLAY_POSE_DEG = [0.0, -30.0, 45.0, 0.0, 0.0, 50.0]
+
+
+class RobotBridge:
+    def __init__(self, arm_enabled: bool, base_enabled: bool):
+        self.arm_enabled = arm_enabled
+        self.base_enabled = base_enabled
+        self.running = True
+        self.arm_positions = list(PLAY_POSE_DEG) if arm_enabled else list(HOME_POSE_DEG)
+        self.base_vx = 0.0
+        self.base_vy = 0.0
+        self.base_wz = 0.0
+
+        # ZMQ setup
+        self.ctx = zmq.Context()
+
+        # PUSH to robot
+        self.cmd_socket = self.ctx.socket(zmq.PUSH)
+        self.cmd_socket.connect(f"tcp://{REMOTE_IP}:{PORT_CMD}")
+        self.cmd_socket.setsockopt(zmq.CONFLATE, 1)
+
+        # PULL observations from robot
+        self.obs_socket = self.ctx.socket(zmq.PULL)
+        self.obs_socket.connect(f"tcp://{REMOTE_IP}:{PORT_OBS}")
+        self.obs_socket.setsockopt(zmq.CONFLATE, 1)
+
+        # SUB to internal pipeline (only if base is enabled)
+        self.pipeline_socket = None
+        if self.base_enabled:
+            self.pipeline_socket = self.ctx.socket(zmq.SUB)
+            self.pipeline_socket.connect(CONTROLLER_PUB)
+            self.pipeline_socket.setsockopt_string(zmq.SUBSCRIBE, ROBOT_COMMAND_TOPIC)
+
+        # E-stop handler
+        signal.signal(signal.SIGINT, self._estop)
+        signal.signal(signal.SIGTERM, self._estop)
+
+    def _estop(self, signum, frame):
+        print("\n[E-STOP] Sending zero commands...")
+        self.running = False
+        self._send_stop()
+
+    def _send_stop(self):
+        action = {
+            ARM_JOINTS[i]: HOME_POSE_DEG[i] for i in range(6)
+        }
+        action.update({"x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0})
+        try:
+            self.cmd_socket.send_string(json.dumps(action))
+            time.sleep(0.05)
+            self.cmd_socket.send_string(json.dumps(action))
+        except Exception:
+            pass
+
+    def _read_pipeline(self):
+        """Read latest ROBOT_COMMAND from internal pipeline (non-blocking)."""
+        if not self.pipeline_socket:
+            return
+        while True:
+            if self.pipeline_socket.poll(0):
+                parts = self.pipeline_socket.recv_multipart()
+                if len(parts) == 2:
+                    data = json.loads(parts[1].decode("utf-8"))
+                    payload = data.get("payload", {})
+                    base_cmd = payload.get("base_cmd", {})
+                    self.base_vx = base_cmd.get("vx", 0.0)
+                    self.base_vy = base_cmd.get("vy", 0.0)
+                    self.base_wz = base_cmd.get("wz", 0.0)
+            else:
+                break
+
+    def _compute_flirt(self, t: float):
+        """Sinusoidal oscillation on the flirt joint."""
+        angle = FLIRT_CENTER_DEG + FLIRT_AMPLITUDE_DEG * math.sin(
+            2 * math.pi * FLIRT_FREQUENCY_HZ * t
+        )
+        self.arm_positions[FLIRT_JOINT_INDEX] = angle
+
+    def _read_observation(self):
+        """Read robot observation (non-blocking) to keep arm positions in sync."""
+        try:
+            msg = self.obs_socket.recv_string(zmq.NOBLOCK)
+            obs = json.loads(msg)
+            for i, joint in enumerate(ARM_JOINTS):
+                if i != FLIRT_JOINT_INDEX or not self.arm_enabled:
+                    self.arm_positions[i] = obs.get(joint, self.arm_positions[i])
+        except zmq.Again:
+            pass
+
+    def connect(self) -> bool:
+        """Wait for first observation from robot."""
+        print(f"Connecting to LeKiwi at {REMOTE_IP}...")
+        poller = zmq.Poller()
+        poller.register(self.obs_socket, zmq.POLLIN)
+        socks = dict(poller.poll(5000))
+        if self.obs_socket not in socks:
+            print("ERROR: Timeout waiting for robot. Is lekiwi_host running?")
+            return False
+
+        msg = self.obs_socket.recv_string()
+        obs = json.loads(msg)
+        for i, joint in enumerate(ARM_JOINTS):
+            self.arm_positions[i] = obs.get(joint, self.arm_positions[i])
+        print(f"Connected! Arm positions: {[f'{p:.1f}' for p in self.arm_positions]}")
+        return True
+
+    def run(self):
+        """Main control loop at 30 Hz."""
+        mode_str = []
+        if self.arm_enabled:
+            mode_str.append("ARM_FLIRT")
+        if self.base_enabled:
+            mode_str.append("BASE_PATH")
+        print(f"Running in mode: {' + '.join(mode_str)}")
+        print("Press Ctrl+C for e-stop.\n")
+
+        t_start = time.time()
+        while self.running:
+            t0 = time.perf_counter()
+            t_elapsed = time.time() - t_start
+
+            # Read pipeline commands
+            if self.base_enabled:
+                self._read_pipeline()
+
+            # Compute arm flirting
+            if self.arm_enabled:
+                self._compute_flirt(t_elapsed)
+
+            # Convert base velocity: pipeline uses rad/s, robot uses deg/s
+            theta_deg_s = math.degrees(self.base_wz) if self.base_enabled else 0.0
+
+            # Build action
+            action = {ARM_JOINTS[i]: self.arm_positions[i] for i in range(6)}
+            action["x.vel"] = self.base_vx if self.base_enabled else 0.0
+            action["y.vel"] = self.base_vy if self.base_enabled else 0.0
+            action["theta.vel"] = theta_deg_s
+
+            # Send to robot
+            self.cmd_socket.send_string(json.dumps(action))
+
+            # Read observation feedback
+            self._read_observation()
+
+            # Status line
+            flirt_str = f"j4={self.arm_positions[FLIRT_JOINT_INDEX]:+6.1f}°" if self.arm_enabled else "arm:off"
+            base_str = f"vx={self.base_vx:+.3f} vy={self.base_vy:+.3f} wz={theta_deg_s:+.1f}°/s"
+            sys.stdout.write(f"\r[BRIDGE] {flirt_str} | {base_str}   ")
+            sys.stdout.flush()
+
+            # Maintain FPS
+            elapsed = time.perf_counter() - t0
+            time.sleep(max(1.0 / FPS - elapsed, 0.0))
+
+        # Cleanup
+        self._send_stop()
+        print("\nStopped.")
+
+    def close(self):
+        self.obs_socket.close()
+        self.cmd_socket.close()
+        if self.pipeline_socket:
+            self.pipeline_socket.close()
+        self.ctx.term()
+
+
+def run_base_test(bridge: RobotBridge, speed: float = 0.1, duration: float = 3.0):
+    """Drive forward, then stop. Simple test of base velocity control."""
+    print(f"Base test: forward at {speed} m/s for {duration}s...")
+    t_start = time.time()
+    while bridge.running and (time.time() - t_start) < duration:
+        t0 = time.perf_counter()
+        action = {ARM_JOINTS[i]: bridge.arm_positions[i] for i in range(6)}
+        action["x.vel"] = speed
+        action["y.vel"] = 0.0
+        action["theta.vel"] = 0.0
+        bridge.cmd_socket.send_string(json.dumps(action))
+        bridge._read_observation()
+        elapsed = time.perf_counter() - t0
+        time.sleep(max(1.0 / FPS - elapsed, 0.0))
+    bridge._send_stop()
+    print("Base test done.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Bridge pipeline to real LeKiwi robot")
+    parser.add_argument("--arm-only", action="store_true", help="Only arm flirting (no base)")
+    parser.add_argument("--base-only", action="store_true", help="Only forward base velocity from pipeline (no arm)")
+    parser.add_argument("--test-base", action="store_true", help="Test: drive forward 0.1 m/s for 3s then stop")
+    parser.add_argument("--speed", type=float, default=0.1, help="Speed for --test-base (m/s, default 0.1)")
+    parser.add_argument("--duration", type=float, default=3.0, help="Duration for --test-base (seconds, default 3)")
+    args = parser.parse_args()
+
+    if args.arm_only and args.base_only:
+        print("ERROR: Cannot specify both --arm-only and --base-only")
+        sys.exit(1)
+
+    arm_enabled = not args.base_only and not args.test_base
+    base_enabled = not args.arm_only
+
+    bridge = RobotBridge(arm_enabled=arm_enabled, base_enabled=(base_enabled and not args.test_base))
+    if not bridge.connect():
+        sys.exit(1)
+
+    if args.test_base:
+        run_base_test(bridge, speed=args.speed, duration=args.duration)
+        bridge.close()
+        return
+
+    try:
+        bridge.run()
+    finally:
+        bridge.close()
+
+
+if __name__ == "__main__":
+    main()
