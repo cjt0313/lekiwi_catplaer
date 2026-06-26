@@ -189,7 +189,11 @@ _INFLATE_KERNEL = cv2.getStructuringElement(
 def inflate_obstacles(grid):
     """Inflate occupied cells by robot collision radius. Returns binary obstacle map."""
     obstacle = (grid == 2).astype(np.uint8)
-    return cv2.dilate(obstacle, _INFLATE_KERNEL)
+    inflated = cv2.dilate(obstacle, _INFLATE_KERNEL)
+    # Keep robot and target areas traversable
+    inflated[grid == 3] = 0
+    inflated[grid == 4] = 0
+    return inflated
 
 
 def astar_grid(grid, start_rc, goal_rc):
@@ -202,8 +206,11 @@ def astar_grid(grid, start_rc, goal_rc):
 
     if not (0 <= gr < GRID_SIZE and 0 <= gc < GRID_SIZE):
         return []
-    if inflated[gr, gc] == 1:
-        return []
+
+    # Clear inflated zone at start and goal — robot is already at start,
+    # and goal must be reachable
+    inflated[sr, sc] = 0
+    inflated[gr, gc] = 0
 
     def h(r, c):
         return ((r - gr)**2 + (c - gc)**2) ** 0.5
