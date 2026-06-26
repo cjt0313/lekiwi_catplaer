@@ -416,6 +416,15 @@ def main():
                     path = astar_grid(grid, start_rc, goal_rc)
                     if path:
                         draw_path_on_grid(grid_img, path)
+                    else:
+                        inflated = inflate_obstacles(grid)
+                        print(f"[A*] NO PATH. start={start_rc} goal={goal_rc}")
+                        print(f"[A*] grid[start]={grid[start_rc]} grid[goal]={grid[goal_rc[0], goal_rc[1]] if 0<=goal_rc[0]<GRID_SIZE and 0<=goal_rc[1]<GRID_SIZE else 'OOB'}")
+                        print(f"[A*] inflated[start]={inflated[start_rc]} inflated[goal]={inflated[goal_rc[0], goal_rc[1]] if 0<=goal_rc[0]<GRID_SIZE and 0<=goal_rc[1]<GRID_SIZE else 'OOB'}")
+                        print(f"[A*] grid unique values: {np.unique(grid, return_counts=True)}")
+                        np.save("debug_grid.npy", grid)
+                        np.save("debug_inflated.npy", inflated)
+                        cv2.imwrite("debug_grid_img.png", grid_img[:, :, ::-1])
 
                 gui_grid.image = grid_img
 
