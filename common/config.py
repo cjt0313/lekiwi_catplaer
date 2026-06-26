@@ -43,7 +43,7 @@ DEPTH_SCALE = 1000.0  # Orbbec depth in millimeters
 
 # AprilTag localization
 APRILTAG_FAMILY = "tagStandard41h12"
-APRILTAG_SIZE = 0.023  # 23mm tag
+APRILTAG_SIZE = 0.0358  # 35.8mm tag
 
 # Base-frame transform (from URDF FK, computed by scripts/compute_T_base_tag.py)
 _T_BASE_TAG_PATH = _os.path.join(_os.path.dirname(__file__), "T_base_tag.npy")
