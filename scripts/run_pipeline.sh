@@ -1,15 +1,51 @@
 #!/bin/bash
 # Start the full pipeline: viz_detection (perception + planning) + robot_bridge.
-# Usage: bash scripts/run_pipeline.sh [--arm-only|--base-only]
+#
+# Usage:
+#   bash scripts/run_pipeline.sh [VIZ_OPTIONS] [-- BRIDGE_OPTIONS]
+#
+# Examples:
+#   bash scripts/run_pipeline.sh --localize --target cat --distance 0.2
+#   bash scripts/run_pipeline.sh --localize --target cup -- --arm-only
+#   bash scripts/run_pipeline.sh --target cat --fps 5 -- --base-only
+#
+# Viz options (before --):
+#   --target CLASS    Detection target (default: cat)
+#   --localize        Enable AprilTag localization (base-frame transform)
+#   --distance M      Standoff distance in meters (default: 0.2)
+#   --fps N           Viz update rate (default: 3)
+#   --port PORT       Viser port (default: 8080)
+#
+# Bridge options (after --):
+#   --arm-only        Only arm flirting
+#   --base-only       Only base path following
 #
 # Requires:
 #   - Robot host running (bash scripts/start_robot_host.sh)
-#   - conda env: lekiwi (for bridge), gspy312 (for viz)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
-BRIDGE_ARGS="${@}"
+# Split args on "--": before goes to viz, after goes to bridge
+VIZ_ARGS=""
+BRIDGE_ARGS=""
+seen_separator=false
+for arg in "$@"; do
+    if [ "$arg" = "--" ]; then
+        seen_separator=true
+        continue
+    fi
+    if $seen_separator; then
+        BRIDGE_ARGS="$BRIDGE_ARGS $arg"
+    else
+        VIZ_ARGS="$VIZ_ARGS $arg"
+    fi
+done
+
+# Default viz args if none given
+if [ -z "$VIZ_ARGS" ]; then
+    VIZ_ARGS="--localize --distance 0.2"
+fi
 
 cleanup() {
     echo ""
@@ -21,8 +57,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Start viz_detection (perception + path planning)
-echo "[1/2] Starting viz_detection..."
-python -m perception.viz_detection --localize --distance 0.2 &
+echo "[1/2] Starting viz_detection ${VIZ_ARGS}..."
+python -m perception.viz_detection $VIZ_ARGS &
 VIZ_PID=$!
 sleep 2
 
