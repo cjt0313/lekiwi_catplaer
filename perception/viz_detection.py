@@ -186,19 +186,29 @@ _INFLATE_KERNEL = cv2.getStructuringElement(
 )
 
 
-def inflate_obstacles(grid, goal_rc=None):
+def inflate_obstacles(grid):
     """Inflate occupied cells by robot collision radius. Returns binary obstacle map."""
     obstacle = (grid == 2).astype(np.uint8)
     inflated = cv2.dilate(obstacle, _INFLATE_KERNEL)
-    # Keep robot and target areas traversable
+    # Robot area is always traversable (we're already there)
     inflated[grid == 3] = 0
-    inflated[grid == 4] = 0
-    # Clear a radius around goal so path can reach it
-    if goal_rc is not None:
-        gr, gc = goal_rc
-        inflated[max(0, gr-_INFLATE_CELLS):min(GRID_SIZE, gr+_INFLATE_CELLS+1),
-                 max(0, gc-_INFLATE_CELLS):min(GRID_SIZE, gc+_INFLATE_CELLS+1)] = 0
     return inflated
+
+
+def find_free_goal(inflated, goal_rc, max_radius=15):
+    """Find nearest free cell to goal_rc in inflated map. Spiral search."""
+    gr, gc = goal_rc
+    if 0 <= gr < GRID_SIZE and 0 <= gc < GRID_SIZE and inflated[gr, gc] == 0:
+        return goal_rc
+    for r in range(1, max_radius + 1):
+        for dr in range(-r, r + 1):
+            for dc in range(-r, r + 1):
+                if abs(dr) != r and abs(dc) != r:
+                    continue
+                nr, nc = gr + dr, gc + dc
+                if 0 <= nr < GRID_SIZE and 0 <= nc < GRID_SIZE and inflated[nr, nc] == 0:
+                    return (nr, nc)
+    return None
 
 
 def astar_grid(grid, start_rc, goal_rc):
@@ -211,10 +221,16 @@ def astar_grid(grid, start_rc, goal_rc):
     if not (0 <= gr < GRID_SIZE and 0 <= gc < GRID_SIZE):
         return []
 
-    inflated = inflate_obstacles(grid, goal_rc=goal_rc)
-    # Clear inflated zone at start — robot is already there
-    inflated[max(0, sr-_INFLATE_CELLS):min(GRID_SIZE, sr+_INFLATE_CELLS+1),
-             max(0, sc-_INFLATE_CELLS):min(GRID_SIZE, sc+_INFLATE_CELLS+1)] = 0
+    inflated = inflate_obstacles(grid)
+
+    # Find collision-free goal near requested goal
+    valid_goal = find_free_goal(inflated, goal_rc)
+    if valid_goal is None:
+        return []
+    gr, gc = valid_goal
+
+    # Start is always free (robot is there)
+    inflated[sr, sc] = 0
 
     def h(r, c):
         return ((r - gr)**2 + (c - gc)**2) ** 0.5
