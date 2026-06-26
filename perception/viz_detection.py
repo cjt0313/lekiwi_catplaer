@@ -186,13 +186,18 @@ _INFLATE_KERNEL = cv2.getStructuringElement(
 )
 
 
-def inflate_obstacles(grid):
+def inflate_obstacles(grid, goal_rc=None):
     """Inflate occupied cells by robot collision radius. Returns binary obstacle map."""
     obstacle = (grid == 2).astype(np.uint8)
     inflated = cv2.dilate(obstacle, _INFLATE_KERNEL)
     # Keep robot and target areas traversable
     inflated[grid == 3] = 0
     inflated[grid == 4] = 0
+    # Clear a radius around goal so path can reach it
+    if goal_rc is not None:
+        gr, gc = goal_rc
+        inflated[max(0, gr-_INFLATE_CELLS):min(GRID_SIZE, gr+_INFLATE_CELLS+1),
+                 max(0, gc-_INFLATE_CELLS):min(GRID_SIZE, gc+_INFLATE_CELLS+1)] = 0
     return inflated
 
 
@@ -200,17 +205,16 @@ def astar_grid(grid, start_rc, goal_rc):
     """A* on 100x100 grid. Returns path as list of (row, col) or empty list."""
     import heapq
 
-    inflated = inflate_obstacles(grid)
     sr, sc = start_rc
     gr, gc = goal_rc
 
     if not (0 <= gr < GRID_SIZE and 0 <= gc < GRID_SIZE):
         return []
 
-    # Clear inflated zone at start and goal — robot is already at start,
-    # and goal must be reachable
-    inflated[sr, sc] = 0
-    inflated[gr, gc] = 0
+    inflated = inflate_obstacles(grid, goal_rc=goal_rc)
+    # Clear inflated zone at start — robot is already there
+    inflated[max(0, sr-_INFLATE_CELLS):min(GRID_SIZE, sr+_INFLATE_CELLS+1),
+             max(0, sc-_INFLATE_CELLS):min(GRID_SIZE, sc+_INFLATE_CELLS+1)] = 0
 
     def h(r, c):
         return ((r - gr)**2 + (c - gc)**2) ** 0.5
