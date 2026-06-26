@@ -10,10 +10,12 @@ Usage:
 
 import sys
 import time
+import json
 import argparse
 
 import cv2
 import numpy as np
+import zmq
 import viser
 
 sys.path.insert(0, ".")
@@ -35,6 +37,10 @@ from perception.detection import (
 from perception.localization import (
     load_detector, detect_tag_pose, invert_transform, transform_points,
 )
+
+# Control signal for robot bridge
+CONTROL_SIGNAL_ADDR = "tcp://127.0.0.1:5570"
+CONTROL_SIGNAL_TOPIC = "bridge_control"
 
 
 
@@ -341,6 +347,26 @@ def main():
     gui_fps = server.gui.add_number("FPS", initial_value=0, disabled=True)
     gui_status = server.gui.add_text("Status", initial_value="Starting...", disabled=True)
     gui_target = server.gui.add_text("Target", initial_value=args.target, disabled=True)
+
+    # Robot control toggle button
+    control_pub = zmq.Context.instance().socket(zmq.PUB)
+    control_pub.bind(CONTROL_SIGNAL_ADDR)
+    robot_enabled = False
+    gui_robot_btn = server.gui.add_button("Robot: OFF", color="red")
+
+    @gui_robot_btn.on_click
+    def _toggle_robot(event):
+        nonlocal robot_enabled
+        robot_enabled = not robot_enabled
+        if robot_enabled:
+            gui_robot_btn.name = "Robot: ON"
+            gui_robot_btn.color = "green"
+        else:
+            gui_robot_btn.name = "Robot: OFF"
+            gui_robot_btn.color = "red"
+        msg = json.dumps({"enabled": robot_enabled}).encode("utf-8")
+        control_pub.send_multipart([CONTROL_SIGNAL_TOPIC.encode("utf-8"), msg])
+
     gui_rgb = server.gui.add_image(
         np.zeros((480, 640, 3), dtype=np.uint8),
         label="Camera",

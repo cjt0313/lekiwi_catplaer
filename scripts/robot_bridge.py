@@ -38,6 +38,10 @@ FPS = 30
 CONTROLLER_PUB = "tcp://127.0.0.1:5565"
 ROBOT_COMMAND_TOPIC = "robot_command"
 
+# Control signal (from viz button)
+CONTROL_SIGNAL_PUB = "tcp://127.0.0.1:5570"
+CONTROL_SIGNAL_TOPIC = "bridge_control"
+
 # Arm joint names (LeKiwi protocol)
 ARM_JOINTS = [
     "arm_shoulder_pan.pos",
@@ -63,6 +67,7 @@ class RobotBridge:
         self.arm_enabled = arm_enabled
         self.base_enabled = base_enabled
         self.running = True
+        self.enabled = True  # controlled by viz button
         self.arm_positions = list(HOME_POSE_DEG)
         self.base_vx = 0.0
         self.base_vy = 0.0
@@ -87,6 +92,11 @@ class RobotBridge:
             self.pipeline_socket = self.ctx.socket(zmq.SUB)
             self.pipeline_socket.connect(CONTROLLER_PUB)
             self.pipeline_socket.setsockopt_string(zmq.SUBSCRIBE, ROBOT_COMMAND_TOPIC)
+
+        # SUB to control signal from viz
+        self.control_socket = self.ctx.socket(zmq.SUB)
+        self.control_socket.connect(CONTROL_SIGNAL_PUB)
+        self.control_socket.setsockopt_string(zmq.SUBSCRIBE, CONTROL_SIGNAL_TOPIC)
 
         # E-stop handler
         signal.signal(signal.SIGINT, self._estop)
@@ -125,6 +135,20 @@ class RobotBridge:
                     self.base_wz = base_cmd.get("wz", 0.0)
             else:
                 break
+
+    def _read_control_signal(self):
+        """Check for enable/disable from viz button (non-blocking)."""
+        while self.control_socket.poll(0):
+            parts = self.control_socket.recv_multipart()
+            if len(parts) == 2:
+                msg = json.loads(parts[1].decode("utf-8"))
+                new_state = msg.get("enabled", self.enabled)
+                if new_state != self.enabled:
+                    self.enabled = new_state
+                    state_str = "ENABLED" if self.enabled else "DISABLED"
+                    print(f"\n[CONTROL] Robot execution {state_str}")
+                    if not self.enabled:
+                        self._send_stop()
 
     def _compute_flirt(self, t: float):
         """Sinusoidal oscillation on the flirt joint."""
@@ -192,6 +216,15 @@ class RobotBridge:
             t0 = time.perf_counter()
             t_elapsed = time.time() - t_start
 
+            # Check for enable/disable from viz
+            self._read_control_signal()
+
+            if not self.enabled:
+                time.sleep(1.0 / FPS)
+                sys.stdout.write("\r[BRIDGE] DISABLED - waiting for enable signal   ")
+                sys.stdout.flush()
+                continue
+
             # Read pipeline commands
             if self.base_enabled:
                 self._read_pipeline()
@@ -232,6 +265,7 @@ class RobotBridge:
     def close(self):
         self.obs_socket.close()
         self.cmd_socket.close()
+        self.control_socket.close()
         if self.pipeline_socket:
             self.pipeline_socket.close()
         self.ctx.term()
