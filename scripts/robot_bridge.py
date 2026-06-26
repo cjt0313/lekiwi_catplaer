@@ -46,7 +46,7 @@ CONTROL_SIGNAL_TOPIC = "bridge_control"
 # Path following controller gains
 KP_LINEAR = 0.5      # proportional gain for linear velocity
 KP_ANGULAR = 1.0     # proportional gain for angular velocity
-MAX_LINEAR_SPEED = 0.15   # m/s
+MAX_LINEAR_SPEED = 0.4    # m/s (fast mode)
 MAX_ANGULAR_SPEED = 0.5   # rad/s
 WAYPOINT_THRESHOLD = 0.08 # meters - switch to next waypoint when this close
 
