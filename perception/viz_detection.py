@@ -445,6 +445,7 @@ def main():
                     gui_status_prefix = "[TAG LOST] "
 
             # Update viser scene
+            world_path = None
             server.scene.add_point_cloud(
                 "/scene/points",
                 points=points_full.astype(np.float32),
