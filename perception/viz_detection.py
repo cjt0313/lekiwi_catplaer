@@ -293,6 +293,8 @@ def main():
     parser.add_argument("--no-zmq", action="store_true", help="Disable ZMQ publishing")
     parser.add_argument("--localize", action="store_true",
                         help="Enable AprilTag-based frame transform (tag = world origin)")
+    parser.add_argument("--distance", type=float, default=DESIRED_CAT_DISTANCE,
+                        help="Desired standoff distance from target (meters)")
     args = parser.parse_args()
 
     # Initialize
@@ -417,15 +419,25 @@ def main():
                 grid_img = _GRID_COLORMAP[grid]
                 grid_img = np.repeat(np.repeat(grid_img, _GRID_SCALE, axis=0), _GRID_SCALE, axis=1)
 
-                # A* path planning from robot to standoff point near target
+                # A* path planning: maintain standoff distance from target
                 if detected:
                     start_rc = (_ROBOT_CENTER, _ROBOT_CENTER)
-                    # Compute standoff goal: DESIRED_CAT_DISTANCE from target, toward robot
                     robot_xy = np.array([0.0, 0.0])
                     dir_to_robot = robot_xy - target_xy
                     dist = np.linalg.norm(dir_to_robot)
-                    if dist > DESIRED_CAT_DISTANCE:
-                        standoff_xy = target_xy + dir_to_robot / dist * DESIRED_CAT_DISTANCE
+                    if dist < args.distance and dist > 0.01:
+                        # Too close — plan path to move away to desired distance
+                        standoff_xy = target_xy + dir_to_robot / dist * args.distance
+                        goal_rc = (
+                            int((standoff_xy[1] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION),
+                            int((standoff_xy[0] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION),
+                        )
+                        path = astar_grid(grid, start_rc, goal_rc)
+                        if path:
+                            draw_path_on_grid(grid_img, path)
+                    elif dist > args.distance:
+                        # Too far — plan path to approach to desired distance
+                        standoff_xy = target_xy + dir_to_robot / dist * args.distance
                         goal_rc = (
                             int((standoff_xy[1] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION),
                             int((standoff_xy[0] + GRID_ORIGIN_OFFSET) / GRID_RESOLUTION),

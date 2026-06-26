@@ -12,7 +12,7 @@ ARM_PLAN_PUB = "tcp://127.0.0.1:5564"
 CONTROLLER_PUB = "tcp://127.0.0.1:5565"
 
 # Robot parameters
-DESIRED_CAT_DISTANCE = 1.0  # meters
+DESIRED_CAT_DISTANCE = 0.2  # meters
 MIN_CAT_DISTANCE = 0.8  # meters
 ROBOT_COLLISION_RADIUS = 0.20  # meters (inflated from 15cm physical)
 
