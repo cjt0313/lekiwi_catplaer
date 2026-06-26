@@ -178,10 +178,10 @@ class RobotBridge:
             dist = math.sqrt(wx * wx + wy * wy)
 
         # Proportional control: drive toward waypoint
-        # Negate signs: path frame (camera/AprilTag) is opposite to robot velocity frame
+        # 90-degree rotation between path frame and robot velocity frame
         if dist > 0.01:
-            self.base_vx = np.clip(KP_LINEAR * (-wx), -MAX_LINEAR_SPEED, MAX_LINEAR_SPEED)
-            self.base_vy = np.clip(KP_LINEAR * (-wy), -MAX_LINEAR_SPEED, MAX_LINEAR_SPEED)
+            self.base_vx = np.clip(KP_LINEAR * (-wy), -MAX_LINEAR_SPEED, MAX_LINEAR_SPEED)
+            self.base_vy = np.clip(KP_LINEAR * (wx), -MAX_LINEAR_SPEED, MAX_LINEAR_SPEED)
         else:
             self.base_vx = 0.0
             self.base_vy = 0.0
