@@ -127,6 +127,8 @@ _YY, _XX = np.ogrid[:GRID_SIZE, :GRID_SIZE]
 _ROBOT_MASK = (_XX - _ROBOT_CENTER)**2 + (_YY - _ROBOT_CENTER)**2 <= ROBOT_RADIUS_CELLS**2
 _FREESPACE_RADIUS_CELLS = int(0.20 / GRID_RESOLUTION)
 _FREESPACE_MASK = (_XX - _ROBOT_CENTER)**2 + (_YY - _ROBOT_CENTER)**2 <= _FREESPACE_RADIUS_CELLS**2
+_ASSUMED_FREE_RADIUS_CELLS = int(2.0 / GRID_RESOLUTION)
+_ASSUMED_FREE_MASK = (_XX - _ROBOT_CENTER)**2 + (_YY - _ROBOT_CENTER)**2 <= _ASSUMED_FREE_RADIUS_CELLS**2
 _CLOSE_KERNEL = np.ones((3, 3), dtype=np.uint8)
 
 _GRID_SCALE = 4
@@ -158,6 +160,9 @@ def generate_grid_map(points, center_xy=None, target_radius_m=None):
     free_binary = (grid == 1).astype(np.uint8)
     closed = cv2.morphologyEx(free_binary, cv2.MORPH_CLOSE, _CLOSE_KERNEL)
     grid[(closed == 1) & (grid == 0)] = 1
+
+    # Assume unknown cells within 2m of robot are freespace
+    grid[_ASSUMED_FREE_MASK & (grid == 0)] = 1
 
     grid[_ROBOT_MASK] = 3
 
