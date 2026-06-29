@@ -1,5 +1,5 @@
 #!/bin/bash
-# One-shot setup: create conda env, install deps, build apriltag.
+# One-shot setup: create conda env and install deps.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -14,18 +14,6 @@ conda activate lekiwi
 # Install Python deps
 pip install -r "$SCRIPT_DIR/requirements.txt"
 
-# Build apriltag-pybind11
-echo "Building apriltag-pybind11..."
-cd "$SCRIPT_DIR/third_party/apriltag-pybind11"
-git submodule update --init --recursive
-mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-cmake --build . -j"$(nproc)"
-
-# Copy .so to site-packages
-SITE_PACKAGES=$(python -c "import sysconfig; print(sysconfig.get_paths()['platlib'])")
-cp apriltag.cpython-*.so "$SITE_PACKAGES/"
-
 echo "=== Setup complete ==="
 echo "Activate with: conda activate lekiwi"
-echo "Run demo with: cd $SCRIPT_DIR && bash run_demo.sh"
+echo "Run pipeline with: cd $SCRIPT_DIR && bash scripts/run_pipeline.sh --localize --target cat"

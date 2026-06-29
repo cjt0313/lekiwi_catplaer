@@ -27,8 +27,7 @@ T_BASE_TAG = np.load(_T_BASE_TAG_PATH) if _os.path.exists(_T_BASE_TAG_PATH) else
 # Perception grid map parameters (2D occupancy)
 GRID_RESOLUTION = 0.025  # meters per cell
 GRID_SIZE = 100  # cells (100x100)
-GRID_PHYSICAL_SIZE = GRID_SIZE * GRID_RESOLUTION  # 2.5m
-GRID_ORIGIN_OFFSET = GRID_PHYSICAL_SIZE / 2  # 1.25m — grid center = robot base
+GRID_ORIGIN_OFFSET = GRID_SIZE * GRID_RESOLUTION / 2  # grid center = robot base
 BASE_HEIGHT_THRESHOLD = 0.01  # points below this Z in base frame are floor
 ROBOT_RADIUS_CELLS = int(0.15 / GRID_RESOLUTION)  # ~6 cells
 TARGET_RADIUS_CELLS = int(0.05 / GRID_RESOLUTION)  # ~2 cells

@@ -2,7 +2,7 @@
 
 import json
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 import zmq
 
@@ -42,11 +42,6 @@ class ZmqMessage:
         }
         return json.dumps(data).encode("utf-8")
 
-    @classmethod
-    def from_bytes(cls, raw: bytes) -> "ZmqMessage":
-        data = json.loads(raw.decode("utf-8"))
-        header = ZmqHeader(**data["header"])
-        return cls(header=header, payload=data["payload"])
 
 
 def make_publisher(address: str) -> zmq.Socket:
@@ -56,26 +51,8 @@ def make_publisher(address: str) -> zmq.Socket:
     return sock
 
 
-def make_subscriber(address: str, topics: list[str] | None = None) -> zmq.Socket:
-    ctx = zmq.Context.instance()
-    sock = ctx.socket(zmq.SUB)
-    sock.connect(address)
-    if topics:
-        for t in topics:
-            sock.setsockopt_string(zmq.SUBSCRIBE, t)
-    else:
-        sock.setsockopt_string(zmq.SUBSCRIBE, "")
-    return sock
-
-
 def publish(sock: zmq.Socket, msg: ZmqMessage):
     topic = msg.header.msg_type.encode("utf-8")
     sock.send_multipart([topic, msg.to_bytes()])
 
 
-def receive(sock: zmq.Socket, timeout_ms: int = 100) -> ZmqMessage | None:
-    if sock.poll(timeout_ms):
-        parts = sock.recv_multipart()
-        if len(parts) == 2:
-            return ZmqMessage.from_bytes(parts[1])
-    return None

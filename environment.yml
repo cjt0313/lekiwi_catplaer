@@ -1,9 +1,0 @@
-name: lekiwi
-channels:
-  - defaults
-dependencies:
-  - python=3.11
-  - pip
-  - pip:
-    - pyzmq>=25.0
-    - numpy>=1.24
