@@ -1,5 +1,7 @@
 pyzmq>=25.0
 numpy>=1.24
-aiohttp>=3.9
-ultralytics>=8.0
 opencv-python>=4.8
+ultralytics>=8.0
+viser>=1.0
+pupil-apriltags>=1.0.4
+pyorbbecsdk>=2.0
