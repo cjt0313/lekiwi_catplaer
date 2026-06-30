@@ -71,9 +71,12 @@ FLIRT_FREQUENCY_HZ = 1.0
 
 
 class RobotBridge:
-    def __init__(self, arm_enabled: bool, base_enabled: bool):
+    def __init__(self, arm_enabled: bool, base_enabled: bool,
+                 max_speed: float = MAX_LINEAR_SPEED, kp: float = KP_LINEAR):
         self.arm_enabled = arm_enabled
         self.base_enabled = base_enabled
+        self.max_speed = max_speed
+        self.kp = kp
         self.running = True
         self.enabled = False  # starts disabled, enable via viz button
         self.arm_positions = list(HOME_POSE_DEG)
@@ -180,8 +183,8 @@ class RobotBridge:
         # Proportional control: drive toward waypoint
         # 90-degree rotation between path frame and robot velocity frame
         if dist > 0.01:
-            self.base_vx = np.clip(KP_LINEAR * (-wy), -MAX_LINEAR_SPEED, MAX_LINEAR_SPEED)
-            self.base_vy = np.clip(KP_LINEAR * (wx), -MAX_LINEAR_SPEED, MAX_LINEAR_SPEED)
+            self.base_vx = np.clip(self.kp * (-wy), -self.max_speed, self.max_speed)
+            self.base_vy = np.clip(self.kp * (wx), -self.max_speed, self.max_speed)
         else:
             self.base_vx = 0.0
             self.base_vy = 0.0
@@ -353,6 +356,8 @@ def main():
     parser = argparse.ArgumentParser(description="Bridge pipeline to real LeKiwi robot")
     parser.add_argument("--arm-only", action="store_true", help="Only arm flirting (no base)")
     parser.add_argument("--base-only", action="store_true", help="Only forward base velocity from pipeline (no arm)")
+    parser.add_argument("--max-speed", type=float, default=MAX_LINEAR_SPEED, help="Max base linear speed in m/s (default: 0.4)")
+    parser.add_argument("--kp", type=float, default=KP_LINEAR, help="Proportional gain for base linear velocity (default: 0.5)")
     parser.add_argument("--test-base", action="store_true", help="Test: drive forward 0.1 m/s for 3s then stop")
     parser.add_argument("--speed", type=float, default=0.1, help="Speed for --test-base (m/s, default 0.1)")
     parser.add_argument("--duration", type=float, default=3.0, help="Duration for --test-base (seconds, default 3)")
@@ -365,7 +370,8 @@ def main():
     arm_enabled = not args.base_only and not args.test_base
     base_enabled = not args.arm_only
 
-    bridge = RobotBridge(arm_enabled=arm_enabled, base_enabled=(base_enabled and not args.test_base))
+    bridge = RobotBridge(arm_enabled=arm_enabled, base_enabled=(base_enabled and not args.test_base),
+                         max_speed=args.max_speed, kp=args.kp)
     if not bridge.connect():
         sys.exit(1)
 
