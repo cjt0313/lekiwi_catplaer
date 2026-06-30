@@ -56,3 +56,20 @@ docs/                Platform setup guides
 - Orbbec RGB-D camera (e.g., Femto Bolt, Gemini 2)
 - LeKiwi mobile manipulator (network-connected at 192.168.100.1)
 - AprilTag (tagStandard41h12, 35.8mm) mounted on the robot
+
+## Network Setup (Mac)
+
+Connect your Mac to the robot via USB Ethernet adapter, then set a static IP:
+
+```bash
+# Set static IP on the USB Ethernet interface
+sudo networksetup -setmanual "USB 10/100/1000 LAN" 192.168.100.2 255.255.255.0
+
+# Verify connectivity
+ping 192.168.100.1
+
+# Revert to DHCP when done
+sudo networksetup -setdhcp "USB 10/100/1000 LAN"
+```
+
+If your adapter has a different name, run `networksetup -listallhardwareports` to find it.
